@@ -199,4 +199,34 @@ productSchema.index({ mainCategory: 1 });
 productSchema.index({ lastUpdated: -1 });
 productSchema.index({ isFeatured: 1 });
 
+// --- Delete-on-insert rotation ------------------------------------------
+// When the master toggle is ON, creating a NEW product hard-deletes the single
+// oldest product (FIFO by createdAt), one-for-one. Fires ONLY on insert, never
+// on edit/update. Silent by design: errors are swallowed so a create never breaks.
+productSchema.pre("save", function (next) {
+  // capture insert-vs-update before save() flips isNew
+  this.$locals.wasNew = this.isNew;
+  next();
+});
+
+productSchema.post("save", async function (doc) {
+  if (!this.$locals.wasNew) return; // updates must not trigger deletion
+  try {
+    const Setting = require("./Setting");
+    const settings = await Setting.findOne().select("autoDeleteEnabled").lean();
+    if (!settings || !settings.autoDeleteEnabled) return;
+
+    const Product = mongoose.model("Product");
+    const oldest = await Product.findOne({ _id: { $ne: doc._id } })
+      .sort({ createdAt: 1 })
+      .select("_id")
+      .lean();
+    if (oldest) {
+      await Product.deleteOne({ _id: oldest._id }); // hard delete, no hooks recursion
+    }
+  } catch {
+    // silent — never surface to the caller
+  }
+});
+
 module.exports = mongoose.model("Product", productSchema);

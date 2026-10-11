@@ -107,6 +107,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: "Internal server error" });
 });
 
+const { startCatalogSync } = require("./services/catalogSync");
+
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
+  startCatalogSync();
 });

